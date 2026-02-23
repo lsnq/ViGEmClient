@@ -155,6 +155,22 @@ extern "C" {
 
     typedef EVT_VIGEM_DS4_NOTIFICATION *PFN_VIGEM_DS4_NOTIFICATION;
 
+    typedef
+        _Function_class_(EVT_VIGEM_DUALSENSE_NOTIFICATION)
+        VOID CALLBACK
+        EVT_VIGEM_DUALSENSE_NOTIFICATION(
+            PVIGEM_CLIENT Client,
+            PVIGEM_TARGET Target,
+            UCHAR LargeMotor,
+            UCHAR SmallMotor,
+            DS4_LIGHTBAR_COLOR LightbarColor,
+            DUALSENSE_TRIGGER_EFFECT RightTrigger,
+            DUALSENSE_TRIGGER_EFFECT LeftTrigger,
+            LPVOID UserData
+        );
+
+    typedef EVT_VIGEM_DUALSENSE_NOTIFICATION *PFN_VIGEM_DUALSENSE_NOTIFICATION;
+
     /**
      *  Allocates an object representing a driver connection
      *
@@ -242,6 +258,8 @@ extern "C" {
      * @returns	A PVIGEM_TARGET representing a DualShock 4 Controller device.
      */
     VIGEM_API PVIGEM_TARGET vigem_target_ds4_alloc(void);
+
+    VIGEM_API PVIGEM_TARGET vigem_target_dualsense_alloc(void);
 
     /**
      * Frees up memory used by the target device object. This does not automatically remove
@@ -615,6 +633,42 @@ extern "C" {
         PVIGEM_TARGET target,
         DWORD milliseconds,
         PDS4_OUTPUT_BUFFER buffer
+    );
+
+    VIGEM_API VIGEM_ERROR vigem_target_dualsense_update(
+        PVIGEM_CLIENT vigem,
+        PVIGEM_TARGET target,
+        DUALSENSE_REPORT report
+    );
+
+    VIGEM_API VIGEM_ERROR vigem_target_dualsense_update_ex(
+        PVIGEM_CLIENT vigem,
+        PVIGEM_TARGET target,
+        DUALSENSE_REPORT_EX report
+    );
+
+    VIGEM_API VIGEM_ERROR vigem_target_dualsense_register_notification(
+        PVIGEM_CLIENT vigem,
+        PVIGEM_TARGET target,
+        PFN_VIGEM_DUALSENSE_NOTIFICATION notification,
+        LPVOID userData
+    );
+
+    VIGEM_API void vigem_target_dualsense_unregister_notification(
+        PVIGEM_TARGET target
+    );
+
+    VIGEM_API VIGEM_ERROR vigem_target_dualsense_await_output_report(
+        PVIGEM_CLIENT vigem,
+        PVIGEM_TARGET target,
+        PDUALSENSE_OUTPUT_BUFFER buffer
+    );
+
+    VIGEM_API VIGEM_ERROR vigem_target_dualsense_await_output_report_timeout(
+        PVIGEM_CLIENT vigem,
+        PVIGEM_TARGET target,
+        DWORD milliseconds,
+        PDUALSENSE_OUTPUT_BUFFER buffer
     );
 
 #ifdef __cplusplus

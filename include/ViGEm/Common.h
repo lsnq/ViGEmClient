@@ -1,7 +1,7 @@
 /*
 MIT License
 
-Copyright (c) 2017-2019 Nefarius Software Solutions e.U. and Contributors
+Copyright (c) 2017-2023 Nefarius Software Solutions e.U. and Contributors
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -92,6 +92,16 @@ VOID FORCEINLINE XUSB_REPORT_INIT(
 {
     RtlZeroMemory(Report, sizeof(XUSB_REPORT));
 }
+
+//
+// Values set by output reports on XINPUT_GAMEPAD
+//
+typedef struct _XUSB_OUTPUT_DATA
+{
+    UCHAR LargeMotor;
+    UCHAR SmallMotor;
+    UCHAR LedNumber;
+} XUSB_OUTPUT_DATA, *PXUSB_OUTPUT_DATA;
 
 //
 // The color value (RGB) of a DualShock 4 Lightbar
@@ -378,6 +388,14 @@ typedef struct _DUALSENSE_OUTPUT_BUFFER
 } DUALSENSE_OUTPUT_BUFFER, *PDUALSENSE_OUTPUT_BUFFER;
 
 #include <poppack.h>
+// Values set by output reports on DualShock 4
+//
+typedef struct _DS4_OUTPUT_DATA
+{
+    UCHAR LargeMotor;
+    UCHAR SmallMotor;
+    DS4_LIGHTBAR_COLOR LightbarColor;
+} DS4_OUTPUT_DATA, *PDS4_OUTPUT_DATA;
 
 #include <pshpack1.h> // pack structs tightly
 //

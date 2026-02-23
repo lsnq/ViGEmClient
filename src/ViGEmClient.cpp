@@ -1,7 +1,7 @@
 /*
 MIT License
 
-Copyright (c) 2017-2019 Nefarius Software Solutions e.U. and Contributors
+Copyright (c) 2017-2023 Nefarius Software Solutions e.U. and Contributors
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -45,55 +45,84 @@ SOFTWARE.
 #include <climits>
 #include <thread>
 #include <functional>
+#include <string>
+#include <iostream>
 
 //
 // Internal
 // 
 #include "Internal.h"
+#include "UniUtil.h"
 
 //#define VIGEM_VERBOSE_LOGGING_ENABLED
+
+#ifndef ERROR_INVALID_DEVICE_OBJECT_PARAMETER
+#define ERROR_INVALID_DEVICE_OBJECT_PARAMETER 0x0000028A
+#endif
 
 
 #pragma region Diagnostics
 
-#define DBGPRINT(kwszDebugFormatString, ...) _DBGPRINT(__FUNCTIONW__, __LINE__, kwszDebugFormatString, __VA_ARGS__)
+#ifdef _DEBUG
+#define DBGPRINT(kwszDebugFormatString, ...) _DBGPRINT(ConvertAnsiToWide(__func__).c_str(), __LINE__, kwszDebugFormatString, __VA_ARGS__)
+#else
+#define DBGPRINT( kwszDebugFormatString, ... ) ;;
+#endif
 
-VOID _DBGPRINT(LPCWSTR kwszFunction, INT iLineNumber, LPCWSTR kwszDebugFormatString, ...) \
+VOID _DBGPRINT(LPCWSTR kwszFunction, INT iLineNumber, LPCWSTR kwszDebugFormatString, ...)
 {
+#if defined(VIGEM_VERBOSE_LOGGING_ENABLED)
 	INT cbFormatString = 0;
 	va_list args;
-	PWCHAR wszDebugString = NULL;
+	PWCHAR wszDebugString = nullptr;
 	size_t st_Offset = 0;
 
 	va_start(args, kwszDebugFormatString);
 
+	// Get size of message string from formatting args
 	cbFormatString = _scwprintf(L"[%s:%d] ", kwszFunction, iLineNumber) * sizeof(WCHAR);
-	cbFormatString += _vscwprintf(kwszDebugFormatString, args) * sizeof(WCHAR) + 2;
+	cbFormatString += _vscwprintf(kwszDebugFormatString, args) * sizeof(WCHAR);
+	cbFormatString += sizeof(WCHAR); // for null-terminator
 
-	/* Depending on the size of the format string, allocate space on the stack or the heap. */
-	wszDebugString = (PWCHAR)_malloca(cbFormatString);
+	// Allocate message string
+	wszDebugString = static_cast<PWCHAR>(malloc(cbFormatString));
+	if (wszDebugString == nullptr)
+		return;
 
-	/* Populate the buffer with the contents of the format string. */
+	// Populate the buffer with the contents of the format string
 	StringCbPrintfW(wszDebugString, cbFormatString, L"[%s:%d] ", kwszFunction, iLineNumber);
 	StringCbLengthW(wszDebugString, cbFormatString, &st_Offset);
-	StringCbVPrintfW(&wszDebugString[st_Offset / sizeof(WCHAR)], cbFormatString - st_Offset, kwszDebugFormatString, args);
+	StringCbVPrintfW(&wszDebugString[st_Offset / sizeof(WCHAR)], cbFormatString - st_Offset, kwszDebugFormatString,
+		args);
 
+	// Ensure null-terminated
+	wszDebugString[cbFormatString - 1] = L'\0';
+
+	// Output message
 	OutputDebugStringW(wszDebugString);
+	OutputDebugStringW(L"\n");
 
-	_freea(wszDebugString);
+	free(wszDebugString);
 	va_end(args);
+#else
+	std::ignore = kwszFunction;
+	std::ignore = iLineNumber;
+	std::ignore = kwszDebugFormatString;
+#endif
 }
 
 static void to_hex(unsigned char* in, size_t insz, char* out, size_t outsz)
 {
 	unsigned char* pin = in;
-	const char* hex = "0123456789ABCDEF";
+	auto hex = "0123456789ABCDEF";
 	char* pout = out;
-	for (; pin < in + insz; pout += 3, pin++) {
+	for (; pin < in + insz; pout += 3, pin++)
+	{
 		pout[0] = hex[(*pin >> 4) & 0xF];
 		pout[1] = hex[*pin & 0xF];
 		pout[2] = ':';
-		if (pout + 3 - out > outsz) {
+		if ((size_t)(pout + 3 - out) > outsz)
+		{
 			/* Better to truncate output string than overflow buffer */
 			/* it would be still better to either return a status */
 			/* or ensure the target buffer is large enough and it never happen */
@@ -128,9 +157,16 @@ PVIGEM_TARGET FORCEINLINE VIGEM_TARGET_ALLOC_INIT(
 
 static DWORD WINAPI vigem_internal_ds4_output_report_pickup_handler(LPVOID Parameter)
 {
-	const PVIGEM_CLIENT pClient = (PVIGEM_CLIENT)Parameter;
+	const auto pClient = static_cast<PVIGEM_CLIENT>(Parameter);
 	DS4_AWAIT_OUTPUT await;
 	DEVICE_IO_CONTROL_BEGIN;
+
+	// Abort event first so that in the case both are signaled at once, the result will be for the abort event
+	const HANDLE waitEvents[] =
+	{
+		pClient->hDS4OutputReportPickupThreadAbortEvent,
+		lOverlapped.hEvent
+	};
 
 	DBGPRINT(L"Started DS4 Output Report pickup thread for 0x%p", pClient);
 
@@ -149,24 +185,77 @@ static DWORD WINAPI vigem_internal_ds4_output_report_pickup_handler(LPVOID Param
 			&lOverlapped
 		);
 
-		if (GetOverlappedResult(pClient->hBusDevice, &lOverlapped, &transferred, TRUE) == 0)
+		const DWORD waitResult = WaitForMultipleObjects(
+			static_cast<DWORD>(std::size(waitEvents)),
+			waitEvents,
+			FALSE,
+			INFINITE
+		);
+
+		if (waitResult == WAIT_OBJECT_0)
+		{
+			DBGPRINT(L"Abort event signalled during read, exiting thread", NULL);
+			CancelIoEx(pClient->hBusDevice, &lOverlapped);
+			break;
+		}
+
+		if (waitResult == WAIT_FAILED)
+		{
+			const DWORD error = GetLastError();
+			DBGPRINT(L"Win32 error from multi-object wait: 0x%X", error);
+			continue;
+		}
+
+		if (waitResult != WAIT_OBJECT_0 + 1)
+		{
+			DBGPRINT(L"Unexpected result from multi-object wait: 0x%X", waitResult);
+		}
+
+		if (GetOverlappedResult(pClient->hBusDevice, &lOverlapped, &transferred, FALSE) == FALSE)
 		{
 			const DWORD error = GetLastError();
 
-			DBGPRINT(L"Win32 Error: 0x%X", error);
+			//
+			// Backwards compatibility with version pre-1.19, where this IOCTL doesn't exist
+			// 
+			if (error == ERROR_INVALID_PARAMETER)
+			{
+				DBGPRINT(L"Currently used driver version doesn't support this request, aborting", NULL);
+				break;
+			}
+
+			if (error == ERROR_OPERATION_ABORTED)
+			{
+				DBGPRINT(L"Read has been cancelled, aborting", NULL);
+				break;
+			}
+
+			if (error == ERROR_IO_INCOMPLETE)
+			{
+				DBGPRINT(L"Pending I/O not completed, aborting", NULL);
+				CancelIoEx(pClient->hBusDevice, &lOverlapped);
+				break;
+			}
+
+			DBGPRINT(L"Win32 error from overlapped result: 0x%X", error);
+			continue;
 		}
 
 #if defined(VIGEM_VERBOSE_LOGGING_ENABLED)
 		DBGPRINT(L"Dumping buffer for %d", await.SerialNo);
 
 		const PCHAR dumpBuffer = (PCHAR)calloc(sizeof(DS4_OUTPUT_BUFFER), 3);
-		to_hex(await.Report.Buffer, sizeof(DS4_OUTPUT_BUFFER), dumpBuffer, sizeof(DS4_OUTPUT_BUFFER) * 3);
-		OutputDebugStringA(dumpBuffer);
+		if (dumpBuffer != nullptr)
+		{
+			to_hex(await.Report.Buffer, sizeof(DS4_OUTPUT_BUFFER), dumpBuffer, sizeof(DS4_OUTPUT_BUFFER) * 3);
+			OutputDebugStringA(dumpBuffer);
+			free(dumpBuffer);
+		}
 #endif
 
 		const PVIGEM_TARGET pTarget = pClient->pTargetsList[await.SerialNo];
 
-		if (pTarget)
+		if (pTarget && !pTarget->IsDisposing && pTarget->Type == DualShock4Wired)
 		{
 			memcpy(&pTarget->Ds4CachedOutputReport, &await.Report, sizeof(DS4_OUTPUT_BUFFER));
 			SetEvent(pTarget->Ds4CachedOutputReportUpdateAvailable);
@@ -175,8 +264,7 @@ static DWORD WINAPI vigem_internal_ds4_output_report_pickup_handler(LPVOID Param
 		{
 			DBGPRINT(L"No target to report to for serial %d", await.SerialNo);
 		}
-
-	} while (WaitForSingleObjectEx(pClient->hDS4OutputReportPickupThreadAbortEvent, 0, FALSE) == WAIT_TIMEOUT);
+	} while (TRUE);
 
 	DEVICE_IO_CONTROL_END;
 
@@ -239,6 +327,7 @@ PVIGEM_CLIENT vigem_alloc()
 		return nullptr;
 
 	RtlZeroMemory(driver, sizeof(VIGEM_CLIENT));
+
 	driver->hBusDevice = INVALID_HANDLE_VALUE;
 	driver->hDS4OutputReportPickupThreadAbortEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
 	driver->hDualSenseOutputReportPickupThreadAbortEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
@@ -249,7 +338,11 @@ PVIGEM_CLIENT vigem_alloc()
 void vigem_free(PVIGEM_CLIENT vigem)
 {
 	if (vigem)
+	{
+		CloseHandle(vigem->hDS4OutputReportPickupThreadAbortEvent);
+
 		free(vigem);
+	}
 }
 
 VIGEM_ERROR vigem_connect(PVIGEM_CLIENT vigem)
@@ -349,12 +442,12 @@ VIGEM_ERROR vigem_connect(PVIGEM_CLIENT vigem)
 		if (GetOverlappedResult(vigem->hBusDevice, &lOverlapped, &transferred, TRUE) != 0)
 		{
 			vigem->hDS4OutputReportPickupThread = CreateThread(
-				NULL,
+				nullptr,
 				0,
 				vigem_internal_ds4_output_report_pickup_handler,
 				vigem,
 				0,
-				NULL
+				nullptr
 			);
 
 			vigem->hDualSenseOutputReportPickupThread = CreateThread(
@@ -395,7 +488,8 @@ void vigem_disconnect(PVIGEM_CLIENT vigem)
 		SetEvent(vigem->hDS4OutputReportPickupThreadAbortEvent);
 		WaitForSingleObject(vigem->hDS4OutputReportPickupThread, INFINITE);
 		CloseHandle(vigem->hDS4OutputReportPickupThread);
-		CloseHandle(vigem->hDS4OutputReportPickupThreadAbortEvent);
+
+		DBGPRINT(L"DS4 thread clean-up for 0x%p finished", vigem);
 	}
 
 	if (vigem->hDualSenseOutputReportPickupThread && vigem->hDualSenseOutputReportPickupThreadAbortEvent)
@@ -454,7 +548,13 @@ PVIGEM_TARGET vigem_target_ds4_alloc(void)
 
 	target->VendorId = 0x054C;
 	target->ProductId = 0x05C4;
-	target->Ds4CachedOutputReportUpdateAvailable = CreateEvent(NULL, FALSE, FALSE, NULL);
+	target->Ds4CachedOutputReportUpdateAvailable = CreateEvent(
+		nullptr,
+		FALSE,
+		FALSE,
+		nullptr
+	);
+	InitializeCriticalSection(&target->Ds4CachedOutputReportUpdateLock);
 
 	return target;
 }
@@ -476,7 +576,16 @@ PVIGEM_TARGET vigem_target_dualsense_alloc(void)
 void vigem_target_free(PVIGEM_TARGET target)
 {
 	if (target)
+	{
+		if (target->Ds4CachedOutputReportUpdateAvailable)
+		{
+			CloseHandle(target->Ds4CachedOutputReportUpdateAvailable);
+		}
+
+		DeleteCriticalSection(&target->Ds4CachedOutputReportUpdateLock);
+
 		free(target);
+	}
 }
 
 VIGEM_ERROR vigem_target_add(PVIGEM_CLIENT vigem, PVIGEM_TARGET target)
@@ -490,7 +599,8 @@ VIGEM_ERROR vigem_target_add(PVIGEM_CLIENT vigem, PVIGEM_TARGET target)
 	OVERLAPPED olWait = { 0 };
 	olWait.hEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
 
-	do {
+	do
+	{
 		if (!vigem)
 		{
 			error = VIGEM_ERROR_BUS_INVALID_HANDLE;
@@ -695,9 +805,14 @@ VIGEM_ERROR vigem_target_remove(PVIGEM_CLIENT vigem, PVIGEM_TARGET target)
 
 	if (GetOverlappedResult(vigem->hBusDevice, &lOverlapped, &transferred, TRUE) != 0)
 	{
-		if (target->Ds4CachedOutputReportUpdateAvailable)
+		if (target->Type == DualShock4Wired)
 		{
-			CloseHandle(target->Ds4CachedOutputReportUpdateAvailable);
+			EnterCriticalSection(&target->Ds4CachedOutputReportUpdateLock);
+			{
+				target->IsDisposing = TRUE;
+				vigem->pTargetsList[target->SerialNo] = nullptr;
+			}
+			LeaveCriticalSection(&target->Ds4CachedOutputReportUpdateLock);
 		}
 
 		if (target->DualSenseCachedOutputReportUpdateAvailable)
@@ -706,8 +821,9 @@ VIGEM_ERROR vigem_target_remove(PVIGEM_CLIENT vigem, PVIGEM_TARGET target)
 		}
 
 		vigem->pTargetsList[target->SerialNo] = NULL;
-
+    
 		target->State = VIGEM_TARGET_DISCONNECTED;
+
 		DEVICE_IO_CONTROL_END;
 
 		return VIGEM_ERROR_NONE;
@@ -832,7 +948,7 @@ VIGEM_ERROR vigem_target_ds4_register_notification(
 	target->Notification = reinterpret_cast<FARPROC>(notification);
 	target->NotificationUserData = userData;
 
-	if (target->CancelNotificationThreadEvent == 0)
+	if (target->CancelNotificationThreadEvent == nullptr)
 		target->CancelNotificationThreadEvent = CreateEvent(
 			nullptr,
 			TRUE,
@@ -900,7 +1016,7 @@ VIGEM_ERROR vigem_target_ds4_register_notification(
 
 void vigem_target_x360_unregister_notification(PVIGEM_TARGET target)
 {
-	if (target->CancelNotificationThreadEvent != 0)
+	if (target->CancelNotificationThreadEvent != nullptr)
 		SetEvent(target->CancelNotificationThreadEvent);
 
 	if (target->CancelNotificationThreadEvent != nullptr)
@@ -1038,7 +1154,11 @@ VIGEM_ERROR vigem_target_ds4_update(
 	return VIGEM_ERROR_NONE;
 }
 
-VIGEM_ERROR vigem_target_ds4_update_ex(PVIGEM_CLIENT vigem, PVIGEM_TARGET target, DS4_REPORT_EX report)
+VIGEM_ERROR vigem_target_ds4_update_ex(
+	PVIGEM_CLIENT vigem,
+	PVIGEM_TARGET target,
+	DS4_REPORT_EX report
+)
 {
 	if (!vigem)
 		return VIGEM_ERROR_BUS_INVALID_HANDLE;
@@ -1198,30 +1318,151 @@ VIGEM_ERROR vigem_target_ds4_await_output_report_timeout(
 	if (vigem->hBusDevice == INVALID_HANDLE_VALUE)
 		return VIGEM_ERROR_BUS_NOT_FOUND;
 
-	if (target->SerialNo == 0)
+	if (target->SerialNo == 0 || target->Type != DualShock4Wired)
 		return VIGEM_ERROR_INVALID_TARGET;
 
 	if (!buffer)
 		return VIGEM_ERROR_INVALID_PARAMETER;
 
-	const DWORD status = WaitForSingleObject(target->Ds4CachedOutputReportUpdateAvailable, milliseconds);
+	VIGEM_ERROR error = VIGEM_ERROR_NONE;
 
-	if (status == WAIT_TIMEOUT)
+	EnterCriticalSection(&target->Ds4CachedOutputReportUpdateLock);
 	{
-		return VIGEM_ERROR_TIMED_OUT;
-	}
+		if (!target->IsDisposing)
+		{
+			const DWORD status = WaitForSingleObject(target->Ds4CachedOutputReportUpdateAvailable, milliseconds);
 
+			if (status == WAIT_TIMEOUT)
+			{
+				error = VIGEM_ERROR_TIMED_OUT;
+			}
+			else
+			{
 #if defined(VIGEM_VERBOSE_LOGGING_ENABLED)
-	DBGPRINT(L"Dumping buffer for %d", target->SerialNo);
+				DBGPRINT(L"Dumping buffer for %d", target->SerialNo);
 
-	const PCHAR dumpBuffer = (PCHAR)calloc(sizeof(DS4_OUTPUT_BUFFER), 3);
-	to_hex(target->Ds4CachedOutputReport.Buffer, sizeof(DS4_OUTPUT_BUFFER), dumpBuffer, sizeof(DS4_OUTPUT_BUFFER) * 3);
-	OutputDebugStringA(dumpBuffer);
+				const PCHAR dumpBuffer = (PCHAR)calloc(sizeof(DS4_OUTPUT_BUFFER), 3);
+				to_hex(target->Ds4CachedOutputReport.Buffer, sizeof(DS4_OUTPUT_BUFFER), dumpBuffer, sizeof(DS4_OUTPUT_BUFFER) * 3);
+				OutputDebugStringA(dumpBuffer);
 #endif
 
-	RtlCopyMemory(buffer, &target->Ds4CachedOutputReport, sizeof(DS4_OUTPUT_BUFFER));
+				RtlCopyMemory(buffer, &target->Ds4CachedOutputReport, sizeof(DS4_OUTPUT_BUFFER));
+			}
+		}
+		else
+		{
+			error = VIGEM_ERROR_IS_DISPOSING;
+		}
+	}
+	LeaveCriticalSection(&target->Ds4CachedOutputReportUpdateLock);
 
-	return VIGEM_ERROR_NONE;
+	return error;
+}
+
+VIGEM_ERROR vigem_target_x360_get_output(
+    PVIGEM_CLIENT vigem,
+    PVIGEM_TARGET target,
+    PXUSB_OUTPUT_DATA output
+)
+{
+    if (!vigem)
+        return VIGEM_ERROR_BUS_INVALID_HANDLE;
+
+    if (!target)
+        return VIGEM_ERROR_INVALID_TARGET;
+
+    if (vigem->hBusDevice == INVALID_HANDLE_VALUE)
+        return VIGEM_ERROR_BUS_NOT_FOUND;
+
+    if (target->SerialNo == 0 || target->Type != Xbox360Wired)
+        return VIGEM_ERROR_INVALID_TARGET;
+
+    if (!output)
+        return VIGEM_ERROR_INVALID_PARAMETER;
+
+    DWORD transferred = 0;
+    OVERLAPPED lOverlapped = { 0 };
+    lOverlapped.hEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
+
+    XUSB_REQUEST_NOTIFICATION xrn;
+    XUSB_REQUEST_NOTIFICATION_INIT(&xrn, target->SerialNo);
+
+    DeviceIoControl(
+        vigem->hBusDevice,
+        IOCTL_XUSB_REQUEST_NOTIFICATION,
+        &xrn,
+        xrn.Size,
+        &xrn,
+        xrn.Size,
+        &transferred,
+        &lOverlapped
+    );
+
+    if (GetOverlappedResult(vigem->hBusDevice, &lOverlapped, &transferred, TRUE) == 0)
+    {
+        return VIGEM_ERROR_INVALID_TARGET;
+    }
+
+    CloseHandle(lOverlapped.hEvent);
+
+    output->LargeMotor = xrn.LargeMotor;
+    output->SmallMotor = xrn.SmallMotor;
+    output->LedNumber = xrn.LedNumber;
+
+    return VIGEM_ERROR_NONE;
+}
+
+VIGEM_ERROR vigem_target_ds4_get_output(
+    PVIGEM_CLIENT vigem,
+    PVIGEM_TARGET target,
+    PDS4_OUTPUT_DATA output
+)
+{
+    if (!vigem)
+        return VIGEM_ERROR_BUS_INVALID_HANDLE;
+
+    if (!target)
+        return VIGEM_ERROR_INVALID_TARGET;
+
+    if (vigem->hBusDevice == INVALID_HANDLE_VALUE)
+        return VIGEM_ERROR_BUS_NOT_FOUND;
+
+    if (target->SerialNo == 0 || target->Type != DualShock4Wired)
+        return VIGEM_ERROR_INVALID_TARGET;
+
+    if (!output)
+        return VIGEM_ERROR_INVALID_PARAMETER;
+
+    DWORD transferred = 0;
+    OVERLAPPED lOverlapped = { 0 };
+    lOverlapped.hEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
+
+    DS4_REQUEST_NOTIFICATION ds4rn;
+    DS4_REQUEST_NOTIFICATION_INIT(&ds4rn, target->SerialNo);
+
+    DeviceIoControl(
+        vigem->hBusDevice,
+        IOCTL_DS4_REQUEST_NOTIFICATION,
+        &ds4rn,
+        ds4rn.Size,
+        &ds4rn,
+        ds4rn.Size,
+        &transferred,
+        &lOverlapped
+    );
+
+    if (GetOverlappedResult(vigem->hBusDevice, &lOverlapped, &transferred, TRUE) == 0)
+    {
+        return VIGEM_ERROR_INVALID_TARGET;
+    }
+
+    CloseHandle(lOverlapped.hEvent);
+
+    output->LargeMotor = ds4rn.Report.LargeMotor;
+    output->SmallMotor = ds4rn.Report.SmallMotor;
+    output->LightbarColor = ds4rn.Report.LightbarColor;
+
+    return VIGEM_ERROR_NONE;
 }
 
 VIGEM_ERROR vigem_target_dualsense_update(

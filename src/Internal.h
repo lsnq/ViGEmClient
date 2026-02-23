@@ -1,7 +1,7 @@
 /*
 MIT License
 
-Copyright (c) 2017-2019 Nefarius Software Solutions e.U. and Contributors
+Copyright (c) 2017-2023 Nefarius Software Solutions e.U. and Contributors
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -74,6 +74,8 @@ typedef struct _VIGEM_TARGET_T
     HANDLE Ds4CachedOutputReportUpdateAvailable;
     DUALSENSE_OUTPUT_BUFFER DualSenseCachedOutputReport;
     HANDLE DualSenseCachedOutputReportUpdateAvailable;
+    CRITICAL_SECTION Ds4CachedOutputReportUpdateLock;
+    BOOLEAN IsDisposing;
 } VIGEM_TARGET;
 
 #define DEVICE_IO_CONTROL_BEGIN	\

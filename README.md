@@ -1,14 +1,22 @@
 # ViGEm Client Native SDK
 
-C/C++ developer SDK for communication with [`ViGEmBus`](https://github.com/ViGEm/ViGEmBus).
+C/C++ developer SDK for communication with [`ViGEmBus`](https://github.com/nefarius/ViGEmBus).
 
-[![Build status](https://ci.appveyor.com/api/projects/status/k806d3m2egjr0j56?svg=true)](https://ci.appveyor.com/project/nefarius/vigemclient) [![Discord](https://img.shields.io/discord/346756263763378176.svg)](https://discord.vigem.org)
+[![Build status](https://ci.appveyor.com/api/projects/status/k806d3m2egjr0j56?svg=true)](https://ci.appveyor.com/project/nefarius/vigemclient) [![Discord](https://img.shields.io/discord/346756263763378176.svg)](https://discord.nefarius.at)
+
+---
+
+## 🧟 THIS PROJECT HAS BEEN RETIRED 🧟
+
+Users of this software are encouraged to [read the end-of-life statement](https://docs.nefarius.at/projects/ViGEm/End-of-Life/). So long, cheers 🖖
+
+---
 
 ## About
 
 **TL;DR:** use this if you want to create virtual game controllers from your C/C++ application 😊
 
-The `ViGEmClient` provides a small library exposing a simple API for creating and "feeding" (periodically updating it with new input data) virtual game controllers through [`ViGEmBus`](https://github.com/ViGEm/ViGEmBus). The library takes care of discovering a compatible instance of the bus driver on the user's system and abstracting away the inner workings of the emulation framework. You can use and distribute it with your project as either a static component (recommended) or a dynamic library (DLL). This library is **not** thread-safe, ensure proper synchronization in a multi-threaded environment.
+The `ViGEmClient` provides a small library exposing a simple API for creating and "feeding" (periodically updating it with new input data) virtual game controllers through [`ViGEmBus`](https://github.com/nefarius/ViGEmBus). The library takes care of discovering a compatible instance of the bus driver on the user's system and abstracting away the inner workings of the emulation framework. You can use and distribute it with your project as either a static component (recommended) or a dynamic library (DLL). This library is **not** thread-safe, ensure proper synchronization in a multi-threaded environment.
 
 ## How to build
 
@@ -23,17 +31,17 @@ The `ViGEmClient` provides a small library exposing a simple API for creating an
 
 Found a bug and want it fixed? Open a detailed issue on the [GitHub issue tracker](../../issues)!
 
-Have an idea for a new feature? Let's have a chat about your request on [our support channels](https://vigem.org/Community-Support/).
+Have an idea for a new feature? Let's have a chat about your request on [our support channels](https://docs.nefarius.at/Community-Support/).
 
 ### Questions & Support
 
-Please respect that the GitHub issue tracker isn't a helpdesk. We offer [support resources](https://vigem.org/Community-Support/), where you're welcome to check out and engage in discussions!
+Please respect that the GitHub issue tracker isn't a helpdesk. We offer [support resources](https://docs.nefarius.at/Community-Support/), where you're welcome to check out and engage in discussions!
 
 ## How to use
 
 ### Integration
 
-Integrating this library into your project is pretty straight-forward, there are no additional 3rd party dependencies. You can either `git submodule` or `git subtree` this repository directly into your source tree or use the provided [`vcpkg`](https://github.com/microsoft/vcpkg) package manager integration [found here](https://github.com/ViGEm/ViGEmClient.vcpkg) (recommended, can be updated with ease). The library tries to handle driver compatibility internally so static linking is recommended to avoid DLL hell 😊
+Integrating this library into your project is pretty straight-forward, there are no additional 3rd party dependencies. You can either `git submodule` or `git subtree` this repository directly into your source tree or use the provided [`vcpkg`](https://github.com/microsoft/vcpkg) package manager integration [found here](https://github.com/nefarius/ViGEmClient.vcpkg) (recommended, can be updated with ease). The library tries to handle driver compatibility internally so static linking is recommended to avoid DLL hell 😊
 
 ### API usage
 

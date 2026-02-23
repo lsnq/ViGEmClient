@@ -37,7 +37,11 @@ typedef enum _VIGEM_TARGET_TYPE
     //
     // Sony DualShock 4 (wired)
     // 
-    DualShock4Wired = 2 // NOTE: 1 skipped on purpose to maintain compatibility
+    DualShock4Wired = 2, // NOTE: 1 skipped on purpose to maintain compatibility
+    //
+    // Sony DualSense (wired)
+    // 
+    DualSenseWired = 3
 
 } VIGEM_TARGET_TYPE, *PVIGEM_TARGET_TYPE;
 
@@ -211,6 +215,179 @@ VOID FORCEINLINE DS4_REPORT_INIT(
 }
 
 //
+// DualSense digital buttons (same bit positions as DS4)
+// 
+typedef enum _DUALSENSE_BUTTONS
+{
+    DUALSENSE_BUTTON_THUMB_RIGHT      = 1 << 15,
+    DUALSENSE_BUTTON_THUMB_LEFT       = 1 << 14,
+    DUALSENSE_BUTTON_OPTIONS          = 1 << 13,
+    DUALSENSE_BUTTON_CREATE           = 1 << 12,
+    DUALSENSE_BUTTON_TRIGGER_RIGHT    = 1 << 11,
+    DUALSENSE_BUTTON_TRIGGER_LEFT     = 1 << 10,
+    DUALSENSE_BUTTON_SHOULDER_RIGHT   = 1 << 9,
+    DUALSENSE_BUTTON_SHOULDER_LEFT    = 1 << 8,
+    DUALSENSE_BUTTON_TRIANGLE         = 1 << 7,
+    DUALSENSE_BUTTON_CIRCLE           = 1 << 6,
+    DUALSENSE_BUTTON_CROSS            = 1 << 5,
+    DUALSENSE_BUTTON_SQUARE           = 1 << 4
+
+} DUALSENSE_BUTTONS, *PDUALSENSE_BUTTONS;
+
+//
+// DualSense special buttons
+// 
+typedef enum _DUALSENSE_SPECIAL_BUTTONS
+{
+    DUALSENSE_SPECIAL_BUTTON_PS           = 1 << 0,
+    DUALSENSE_SPECIAL_BUTTON_TOUCHPAD     = 1 << 1,
+    DUALSENSE_SPECIAL_BUTTON_MUTE         = 1 << 2
+
+} DUALSENSE_SPECIAL_BUTTONS, *PDUALSENSE_SPECIAL_BUTTONS;
+
+//
+// DualSense adaptive trigger effect modes
+//
+typedef enum _DUALSENSE_TRIGGER_EFFECT_MODE
+{
+    DUALSENSE_TRIGGER_EFFECT_OFF               = 0x00,
+    DUALSENSE_TRIGGER_EFFECT_CONTINUOUS        = 0x01,
+    DUALSENSE_TRIGGER_EFFECT_SECTION           = 0x02,
+    DUALSENSE_TRIGGER_EFFECT_VIBRATION         = 0x06,
+    DUALSENSE_TRIGGER_EFFECT_CALIBRATION       = 0x21,
+    DUALSENSE_TRIGGER_EFFECT_FEEDBACK_VIBRATE  = 0x25,
+    DUALSENSE_TRIGGER_EFFECT_MULTI_VIBRATE     = 0x26,
+    DUALSENSE_TRIGGER_EFFECT_SLOPE_FEEDBACK    = 0xFC
+} DUALSENSE_TRIGGER_EFFECT_MODE, *PDUALSENSE_TRIGGER_EFFECT_MODE;
+
+//
+// DualSense adaptive trigger effect parameters
+//
+typedef struct _DUALSENSE_TRIGGER_EFFECT
+{
+    UCHAR Mode;
+    UCHAR Params[6];
+} DUALSENSE_TRIGGER_EFFECT, *PDUALSENSE_TRIGGER_EFFECT;
+
+//
+// DualSense directional pad values (same as DS4)
+// 
+typedef enum _DUALSENSE_DPAD_DIRECTIONS
+{
+    DUALSENSE_BUTTON_DPAD_NONE        = 0x8,
+    DUALSENSE_BUTTON_DPAD_NORTHWEST   = 0x7,
+    DUALSENSE_BUTTON_DPAD_WEST        = 0x6,
+    DUALSENSE_BUTTON_DPAD_SOUTHWEST   = 0x5,
+    DUALSENSE_BUTTON_DPAD_SOUTH       = 0x4,
+    DUALSENSE_BUTTON_DPAD_SOUTHEAST   = 0x3,
+    DUALSENSE_BUTTON_DPAD_EAST        = 0x2,
+    DUALSENSE_BUTTON_DPAD_NORTHEAST   = 0x1,
+    DUALSENSE_BUTTON_DPAD_NORTH       = 0x0
+
+} DUALSENSE_DPAD_DIRECTIONS, *PDUALSENSE_DPAD_DIRECTIONS;
+
+//
+// DualSense HID Input report (simplified)
+// Byte order matches the HID report: sticks, triggers, buttons
+// 
+typedef struct _DUALSENSE_REPORT
+{
+    BYTE bThumbLX;
+    BYTE bThumbLY;
+    BYTE bThumbRX;
+    BYTE bThumbRY;
+    BYTE bTriggerL;
+    BYTE bTriggerR;
+    USHORT wButtons;
+    BYTE bSpecial;
+
+} DUALSENSE_REPORT, *PDUALSENSE_REPORT;
+
+//
+// Sets the current state of the D-PAD on a DualSense report.
+// 
+VOID FORCEINLINE DUALSENSE_SET_DPAD(
+    _Out_ PDUALSENSE_REPORT Report,
+    _In_ DUALSENSE_DPAD_DIRECTIONS Dpad
+)
+{
+    Report->wButtons &= ~0xF;
+    Report->wButtons |= (USHORT)Dpad;
+}
+
+VOID FORCEINLINE DUALSENSE_REPORT_INIT(
+    _Out_ PDUALSENSE_REPORT Report
+)
+{
+    RtlZeroMemory(Report, sizeof(DUALSENSE_REPORT));
+
+    Report->bThumbLX = 0x80;
+    Report->bThumbLY = 0x80;
+    Report->bThumbRX = 0x80;
+    Report->bThumbRY = 0x80;
+
+    DUALSENSE_SET_DPAD(Report, DUALSENSE_BUTTON_DPAD_NONE);
+}
+
+#include <pshpack1.h> // pack structs tightly
+
+//
+// DualSense touchpad structure (same layout as DS4)
+//
+typedef struct _DUALSENSE_TOUCH
+{
+    BYTE bPacketCounter;
+    BYTE bIsUpTrackingNum1;
+    BYTE bTouchData1[3];
+    BYTE bIsUpTrackingNum2;
+    BYTE bTouchData2[3];
+} DUALSENSE_TOUCH, * PDUALSENSE_TOUCH;
+
+//
+// DualSense complete HID Input report
+//
+typedef struct _DUALSENSE_REPORT_EX
+{
+    union
+    {
+        struct
+        {
+            BYTE bThumbLX;
+            BYTE bThumbLY;
+            BYTE bThumbRX;
+            BYTE bThumbRY;
+            BYTE bTriggerL;
+            BYTE bTriggerR;
+            BYTE bCounter;
+            USHORT wButtons;
+            BYTE bSpecial;
+            BYTE _bReserved0;
+            ULONG dwTimestamp;
+            SHORT wGyroX;
+            SHORT wGyroY;
+            SHORT wGyroZ;
+            SHORT wAccelX;
+            SHORT wAccelY;
+            SHORT wAccelZ;
+            ULONG dwSensorTimestamp;
+            BYTE bTemperature;
+            DUALSENSE_TOUCH sCurrentTouch;
+            DUALSENSE_TOUCH sPreviousTouch;
+            BYTE _bReserved1;
+            ULONG dwCRC32;
+        } Report;
+
+        UCHAR ReportBuffer[63];
+    };
+} DUALSENSE_REPORT_EX, *PDUALSENSE_REPORT_EX;
+
+typedef struct _DUALSENSE_OUTPUT_BUFFER
+{
+    _Out_ UCHAR Buffer[64];
+
+} DUALSENSE_OUTPUT_BUFFER, *PDUALSENSE_OUTPUT_BUFFER;
+
+#include <poppack.h>
 // Values set by output reports on DualShock 4
 //
 typedef struct _DS4_OUTPUT_DATA

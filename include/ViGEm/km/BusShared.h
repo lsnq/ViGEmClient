@@ -72,6 +72,9 @@ DEFINE_GUID(GUID_DEVINTERFACE_BUSENUM_VIGEM,
 //#define IOCTL_XGIP_SUBMIT_INTERRUPT     BUSENUM_W_IOCTL (IOCTL_VIGEM_BASE + 0x205)
 #define IOCTL_XUSB_GET_USER_INDEX           BUSENUM_RW_IOCTL(IOCTL_VIGEM_BASE + 0x206)
 #define IOCTL_DS4_AWAIT_OUTPUT_AVAILABLE    BUSENUM_RW_IOCTL(IOCTL_VIGEM_BASE + 0x207)
+#define IOCTL_DUALSENSE_SUBMIT_REPORT       BUSENUM_W_IOCTL (IOCTL_VIGEM_BASE + 0x300)
+#define IOCTL_DUALSENSE_REQUEST_NOTIFICATION BUSENUM_W_IOCTL(IOCTL_VIGEM_BASE + 0x301)
+#define IOCTL_DUALSENSE_AWAIT_OUTPUT_AVAILABLE BUSENUM_RW_IOCTL(IOCTL_VIGEM_BASE + 0x302)
 
 
 //
@@ -463,6 +466,118 @@ VOID FORCEINLINE DS4_SUBMIT_REPORT_EX_INIT(
 
     Report->Size = sizeof(DS4_SUBMIT_REPORT_EX);
     Report->SerialNo = SerialNo;
+}
+
+#pragma endregion
+
+#pragma region DualSense section
+
+typedef struct _DUALSENSE_OUTPUT_REPORT
+{
+    UCHAR SmallMotor;
+    UCHAR LargeMotor;
+    DS4_LIGHTBAR_COLOR LightbarColor;
+    DUALSENSE_TRIGGER_EFFECT RightTriggerEffect;
+    DUALSENSE_TRIGGER_EFFECT LeftTriggerEffect;
+
+} DUALSENSE_OUTPUT_REPORT, *PDUALSENSE_OUTPUT_REPORT;
+
+typedef struct _DUALSENSE_REQUEST_NOTIFICATION
+{
+    ULONG Size;
+
+    ULONG SerialNo;
+
+    DUALSENSE_OUTPUT_REPORT Report;
+
+} DUALSENSE_REQUEST_NOTIFICATION, *PDUALSENSE_REQUEST_NOTIFICATION;
+
+VOID FORCEINLINE DUALSENSE_REQUEST_NOTIFICATION_INIT(
+    _Out_ PDUALSENSE_REQUEST_NOTIFICATION Request,
+    _In_ ULONG SerialNo
+)
+{
+    RtlZeroMemory(Request, sizeof(DUALSENSE_REQUEST_NOTIFICATION));
+
+    Request->Size = sizeof(DUALSENSE_REQUEST_NOTIFICATION);
+    Request->SerialNo = SerialNo;
+}
+
+typedef struct _DUALSENSE_SUBMIT_REPORT
+{
+    ULONG Size;
+
+    ULONG SerialNo;
+
+    DUALSENSE_REPORT Report;
+
+} DUALSENSE_SUBMIT_REPORT, *PDUALSENSE_SUBMIT_REPORT;
+
+VOID FORCEINLINE DUALSENSE_SUBMIT_REPORT_INIT(
+    _Out_ PDUALSENSE_SUBMIT_REPORT Report,
+    _In_ ULONG SerialNo
+)
+{
+    RtlZeroMemory(Report, sizeof(DUALSENSE_SUBMIT_REPORT));
+
+    Report->Size = sizeof(DUALSENSE_SUBMIT_REPORT);
+    Report->SerialNo = SerialNo;
+
+    DUALSENSE_REPORT_INIT(&Report->Report);
+}
+
+#include <pshpack1.h>
+
+typedef struct _DUALSENSE_SUBMIT_REPORT_EX
+{
+    _In_ ULONG Size;
+
+    _In_ ULONG SerialNo;
+
+    _In_ DUALSENSE_REPORT_EX Report;
+
+} DUALSENSE_SUBMIT_REPORT_EX, * PDUALSENSE_SUBMIT_REPORT_EX;
+
+#include <poppack.h>
+
+VOID FORCEINLINE DUALSENSE_SUBMIT_REPORT_EX_INIT(
+    _Out_ PDUALSENSE_SUBMIT_REPORT_EX Report,
+    _In_ ULONG SerialNo
+)
+{
+    RtlZeroMemory(Report, sizeof(DUALSENSE_SUBMIT_REPORT_EX));
+
+    Report->Size = sizeof(DUALSENSE_SUBMIT_REPORT_EX);
+    Report->SerialNo = SerialNo;
+}
+
+#pragma endregion
+
+#pragma region DualSense Await Output
+
+#include <pshpack1.h>
+
+typedef struct _DUALSENSE_AWAIT_OUTPUT
+{
+    _In_ ULONG Size;
+
+    _Inout_ ULONG SerialNo;
+
+    _Out_ DUALSENSE_OUTPUT_BUFFER Report;
+
+} DUALSENSE_AWAIT_OUTPUT, * PDUALSENSE_AWAIT_OUTPUT;
+
+#include <poppack.h>
+
+VOID FORCEINLINE DUALSENSE_AWAIT_OUTPUT_INIT(
+    _Out_ PDUALSENSE_AWAIT_OUTPUT Output,
+    _In_ ULONG SerialNo
+)
+{
+    RtlZeroMemory(Output, sizeof(DUALSENSE_AWAIT_OUTPUT));
+
+    Output->Size = sizeof(DUALSENSE_AWAIT_OUTPUT);
+    Output->SerialNo = SerialNo;
 }
 
 #pragma endregion

@@ -273,6 +273,52 @@ static DWORD WINAPI vigem_internal_ds4_output_report_pickup_handler(LPVOID Param
 	return 0;
 }
 
+static DWORD WINAPI vigem_internal_dualsense_output_report_pickup_handler(LPVOID Parameter)
+{
+	const PVIGEM_CLIENT pClient = (PVIGEM_CLIENT)Parameter;
+	DUALSENSE_AWAIT_OUTPUT await;
+	DEVICE_IO_CONTROL_BEGIN;
+
+	DBGPRINT(L"Started DualSense Output Report pickup thread for 0x%p", pClient);
+
+	do
+	{
+		DUALSENSE_AWAIT_OUTPUT_INIT(&await, 0);
+
+		DeviceIoControl(
+			pClient->hBusDevice,
+			IOCTL_DUALSENSE_AWAIT_OUTPUT_AVAILABLE,
+			&await,
+			await.Size,
+			&await,
+			await.Size,
+			&transferred,
+			&lOverlapped
+		);
+
+		if (GetOverlappedResult(pClient->hBusDevice, &lOverlapped, &transferred, TRUE) == 0)
+		{
+			const DWORD error = GetLastError();
+			DBGPRINT(L"Win32 Error: 0x%X", error);
+		}
+
+		const PVIGEM_TARGET pTarget = pClient->pTargetsList[await.SerialNo];
+
+		if (pTarget)
+		{
+			memcpy(&pTarget->DualSenseCachedOutputReport, &await.Report, sizeof(DUALSENSE_OUTPUT_BUFFER));
+			SetEvent(pTarget->DualSenseCachedOutputReportUpdateAvailable);
+		}
+
+	} while (WaitForSingleObjectEx(pClient->hDualSenseOutputReportPickupThreadAbortEvent, 0, FALSE) == WAIT_TIMEOUT);
+
+	DEVICE_IO_CONTROL_END;
+
+	DBGPRINT(L"Finished DualSense Output Report pickup thread for 0x%p", pClient);
+
+	return 0;
+}
+
 PVIGEM_CLIENT vigem_alloc()
 {
 	const auto driver = static_cast<PVIGEM_CLIENT>(malloc(sizeof(VIGEM_CLIENT)));
@@ -283,12 +329,8 @@ PVIGEM_CLIENT vigem_alloc()
 	RtlZeroMemory(driver, sizeof(VIGEM_CLIENT));
 
 	driver->hBusDevice = INVALID_HANDLE_VALUE;
-	driver->hDS4OutputReportPickupThreadAbortEvent = CreateEvent(
-		nullptr,
-		TRUE,
-		FALSE,
-		nullptr
-	);
+	driver->hDS4OutputReportPickupThreadAbortEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
+	driver->hDualSenseOutputReportPickupThreadAbortEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
 
 	return driver;
 }
@@ -408,6 +450,15 @@ VIGEM_ERROR vigem_connect(PVIGEM_CLIENT vigem)
 				nullptr
 			);
 
+			vigem->hDualSenseOutputReportPickupThread = CreateThread(
+				NULL,
+				0,
+				vigem_internal_dualsense_output_report_pickup_handler,
+				vigem,
+				0,
+				NULL
+			);
+
 			error = VIGEM_ERROR_NONE;
 			free(detailDataBuffer);
 			CloseHandle(lOverlapped.hEvent);
@@ -439,6 +490,16 @@ void vigem_disconnect(PVIGEM_CLIENT vigem)
 		CloseHandle(vigem->hDS4OutputReportPickupThread);
 
 		DBGPRINT(L"DS4 thread clean-up for 0x%p finished", vigem);
+	}
+
+	if (vigem->hDualSenseOutputReportPickupThread && vigem->hDualSenseOutputReportPickupThreadAbortEvent)
+	{
+		DBGPRINT(L"Awaiting DualSense thread clean-up for 0x%p", vigem);
+
+		SetEvent(vigem->hDualSenseOutputReportPickupThreadAbortEvent);
+		WaitForSingleObject(vigem->hDualSenseOutputReportPickupThread, INFINITE);
+		CloseHandle(vigem->hDualSenseOutputReportPickupThread);
+		CloseHandle(vigem->hDualSenseOutputReportPickupThreadAbortEvent);
 	}
 
 	if (vigem->hBusDevice != INVALID_HANDLE_VALUE)
@@ -494,6 +555,20 @@ PVIGEM_TARGET vigem_target_ds4_alloc(void)
 		nullptr
 	);
 	InitializeCriticalSection(&target->Ds4CachedOutputReportUpdateLock);
+
+	return target;
+}
+
+PVIGEM_TARGET vigem_target_dualsense_alloc(void)
+{
+	const auto target = VIGEM_TARGET_ALLOC_INIT(DualSenseWired);
+
+	if (!target)
+		return nullptr;
+
+	target->VendorId = 0x054C;
+	target->ProductId = 0x0CE6;
+	target->DualSenseCachedOutputReportUpdateAvailable = CreateEvent(NULL, FALSE, FALSE, NULL);
 
 	return target;
 }
@@ -736,11 +811,17 @@ VIGEM_ERROR vigem_target_remove(PVIGEM_CLIENT vigem, PVIGEM_TARGET target)
 			{
 				target->IsDisposing = TRUE;
 				vigem->pTargetsList[target->SerialNo] = nullptr;
-
 			}
 			LeaveCriticalSection(&target->Ds4CachedOutputReportUpdateLock);
 		}
 
+		if (target->DualSenseCachedOutputReportUpdateAvailable)
+		{
+			CloseHandle(target->DualSenseCachedOutputReportUpdateAvailable);
+		}
+
+		vigem->pTargetsList[target->SerialNo] = NULL;
+    
 		target->State = VIGEM_TARGET_DISCONNECTED;
 
 		DEVICE_IO_CONTROL_END;
@@ -1382,4 +1463,247 @@ VIGEM_ERROR vigem_target_ds4_get_output(
     output->LightbarColor = ds4rn.Report.LightbarColor;
 
     return VIGEM_ERROR_NONE;
+}
+
+VIGEM_ERROR vigem_target_dualsense_update(
+	PVIGEM_CLIENT vigem,
+	PVIGEM_TARGET target,
+	DUALSENSE_REPORT report
+)
+{
+	if (!vigem)
+		return VIGEM_ERROR_BUS_INVALID_HANDLE;
+
+	if (!target)
+		return VIGEM_ERROR_INVALID_TARGET;
+
+	if (vigem->hBusDevice == INVALID_HANDLE_VALUE)
+		return VIGEM_ERROR_BUS_NOT_FOUND;
+
+	if (target->SerialNo == 0)
+		return VIGEM_ERROR_INVALID_TARGET;
+
+	DEVICE_IO_CONTROL_BEGIN;
+
+	DUALSENSE_SUBMIT_REPORT dsr;
+	DUALSENSE_SUBMIT_REPORT_INIT(&dsr, target->SerialNo);
+
+	dsr.Report = report;
+
+	DeviceIoControl(
+		vigem->hBusDevice,
+		IOCTL_DUALSENSE_SUBMIT_REPORT,
+		&dsr,
+		dsr.Size,
+		nullptr,
+		0,
+		&transferred,
+		&lOverlapped
+	);
+
+	if (GetOverlappedResult(vigem->hBusDevice, &lOverlapped, &transferred, TRUE) == 0)
+	{
+		if (GetLastError() == ERROR_ACCESS_DENIED)
+		{
+			DEVICE_IO_CONTROL_END;
+			return VIGEM_ERROR_INVALID_TARGET;
+		}
+	}
+
+	DEVICE_IO_CONTROL_END;
+
+	return VIGEM_ERROR_NONE;
+}
+
+VIGEM_ERROR vigem_target_dualsense_update_ex(
+	PVIGEM_CLIENT vigem,
+	PVIGEM_TARGET target,
+	DUALSENSE_REPORT_EX report
+)
+{
+	if (!vigem)
+		return VIGEM_ERROR_BUS_INVALID_HANDLE;
+
+	if (!target)
+		return VIGEM_ERROR_INVALID_TARGET;
+
+	if (vigem->hBusDevice == INVALID_HANDLE_VALUE)
+		return VIGEM_ERROR_BUS_NOT_FOUND;
+
+	if (target->SerialNo == 0)
+		return VIGEM_ERROR_INVALID_TARGET;
+
+	DEVICE_IO_CONTROL_BEGIN;
+
+	DUALSENSE_SUBMIT_REPORT_EX dsr;
+	DUALSENSE_SUBMIT_REPORT_EX_INIT(&dsr, target->SerialNo);
+
+	dsr.Report = report;
+
+	DeviceIoControl(
+		vigem->hBusDevice,
+		IOCTL_DUALSENSE_SUBMIT_REPORT,
+		&dsr,
+		dsr.Size,
+		nullptr,
+		0,
+		&transferred,
+		&lOverlapped
+	);
+
+	if (GetOverlappedResult(vigem->hBusDevice, &lOverlapped, &transferred, TRUE) == 0)
+	{
+		if (GetLastError() == ERROR_ACCESS_DENIED)
+		{
+			DEVICE_IO_CONTROL_END;
+			return VIGEM_ERROR_INVALID_TARGET;
+		}
+
+		if (GetLastError() == ERROR_INVALID_PARAMETER)
+		{
+			DEVICE_IO_CONTROL_END;
+			return VIGEM_ERROR_NOT_SUPPORTED;
+		}
+	}
+
+	DEVICE_IO_CONTROL_END;
+
+	return VIGEM_ERROR_NONE;
+}
+
+VIGEM_ERROR vigem_target_dualsense_register_notification(
+	PVIGEM_CLIENT vigem,
+	PVIGEM_TARGET target,
+	PFN_VIGEM_DUALSENSE_NOTIFICATION notification,
+	LPVOID userData
+)
+{
+	if (!vigem)
+		return VIGEM_ERROR_BUS_INVALID_HANDLE;
+
+	if (!target)
+		return VIGEM_ERROR_INVALID_TARGET;
+
+	if (vigem->hBusDevice == INVALID_HANDLE_VALUE)
+		return VIGEM_ERROR_BUS_NOT_FOUND;
+
+	if (target->SerialNo == 0 || notification == nullptr)
+		return VIGEM_ERROR_INVALID_TARGET;
+
+	if (target->Notification == reinterpret_cast<FARPROC>(notification))
+		return VIGEM_ERROR_CALLBACK_ALREADY_REGISTERED;
+
+	target->Notification = reinterpret_cast<FARPROC>(notification);
+	target->NotificationUserData = userData;
+
+	if (target->CancelNotificationThreadEvent == nullptr)
+		target->CancelNotificationThreadEvent = CreateEvent(nullptr, TRUE, FALSE, nullptr);
+	else
+		ResetEvent(target->CancelNotificationThreadEvent);
+
+	std::thread _async{
+		[](
+		PVIGEM_TARGET _Target,
+		PVIGEM_CLIENT _Client,
+		LPVOID _UserData)
+		{
+			DEVICE_IO_CONTROL_BEGIN;
+
+			DUALSENSE_REQUEST_NOTIFICATION dsrn;
+			DUALSENSE_REQUEST_NOTIFICATION_INIT(&dsrn, _Target->SerialNo);
+
+			do
+			{
+				DeviceIoControl(
+					_Client->hBusDevice,
+					IOCTL_DUALSENSE_REQUEST_NOTIFICATION,
+					&dsrn,
+					dsrn.Size,
+					&dsrn,
+					dsrn.Size,
+					&transferred,
+					&lOverlapped
+				);
+
+				if (GetOverlappedResult(_Client->hBusDevice, &lOverlapped, &transferred, TRUE) != 0)
+				{
+					if (_Target->Notification == nullptr)
+					{
+						DEVICE_IO_CONTROL_END;
+						return;
+					}
+
+					reinterpret_cast<PFN_VIGEM_DUALSENSE_NOTIFICATION>(_Target->Notification)(
+						_Client, _Target, dsrn.Report.LargeMotor,
+						dsrn.Report.SmallMotor,
+						dsrn.Report.LightbarColor,
+						dsrn.Report.RightTriggerEffect,
+						dsrn.Report.LeftTriggerEffect,
+						_UserData
+					);
+
+					continue;
+				}
+
+				if (GetLastError() == ERROR_ACCESS_DENIED || GetLastError() == ERROR_OPERATION_ABORTED)
+				{
+					DEVICE_IO_CONTROL_END;
+					return;
+				}
+			} while (TRUE);
+		},
+		target, vigem, userData
+	};
+
+	_async.detach();
+
+	return VIGEM_ERROR_NONE;
+}
+
+void vigem_target_dualsense_unregister_notification(PVIGEM_TARGET target)
+{
+	vigem_target_x360_unregister_notification(target);
+}
+
+VIGEM_ERROR vigem_target_dualsense_await_output_report(
+	PVIGEM_CLIENT vigem,
+	PVIGEM_TARGET target,
+	PDUALSENSE_OUTPUT_BUFFER buffer
+)
+{
+	return vigem_target_dualsense_await_output_report_timeout(vigem, target, INFINITE, buffer);
+}
+
+VIGEM_ERROR vigem_target_dualsense_await_output_report_timeout(
+	PVIGEM_CLIENT vigem,
+	PVIGEM_TARGET target,
+	DWORD milliseconds,
+	PDUALSENSE_OUTPUT_BUFFER buffer
+)
+{
+	if (!vigem)
+		return VIGEM_ERROR_BUS_INVALID_HANDLE;
+
+	if (!target)
+		return VIGEM_ERROR_INVALID_TARGET;
+
+	if (vigem->hBusDevice == INVALID_HANDLE_VALUE)
+		return VIGEM_ERROR_BUS_NOT_FOUND;
+
+	if (target->SerialNo == 0)
+		return VIGEM_ERROR_INVALID_TARGET;
+
+	if (!buffer)
+		return VIGEM_ERROR_INVALID_PARAMETER;
+
+	const DWORD status = WaitForSingleObject(target->DualSenseCachedOutputReportUpdateAvailable, milliseconds);
+
+	if (status == WAIT_TIMEOUT)
+	{
+		return VIGEM_ERROR_TIMED_OUT;
+	}
+
+	RtlCopyMemory(buffer, &target->DualSenseCachedOutputReport, sizeof(DUALSENSE_OUTPUT_BUFFER));
+
+	return VIGEM_ERROR_NONE;
 }

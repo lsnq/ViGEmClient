@@ -39,6 +39,8 @@ typedef struct _VIGEM_CLIENT_T
     HANDLE hBusDevice;
     HANDLE hDS4OutputReportPickupThread;
     HANDLE hDS4OutputReportPickupThreadAbortEvent;
+    HANDLE hDualSenseOutputReportPickupThread;
+    HANDLE hDualSenseOutputReportPickupThreadAbortEvent;
     PVIGEM_TARGET pTargetsList[VIGEM_TARGETS_MAX];
 } VIGEM_CLIENT;
 
@@ -70,6 +72,8 @@ typedef struct _VIGEM_TARGET_T
 	HANDLE CancelNotificationThreadEvent;
     DS4_OUTPUT_BUFFER Ds4CachedOutputReport;
     HANDLE Ds4CachedOutputReportUpdateAvailable;
+    DUALSENSE_OUTPUT_BUFFER DualSenseCachedOutputReport;
+    HANDLE DualSenseCachedOutputReportUpdateAvailable;
     CRITICAL_SECTION Ds4CachedOutputReportUpdateLock;
     BOOLEAN IsDisposing;
 } VIGEM_TARGET;
